@@ -80,8 +80,12 @@ def dc_block(in_channels, out_channels, kernel_size=3, stride=1, padding=1, name
 class Classifier_ValidateAugmentation(nn.Module):
     def __init__(self, name='cls', in_channels=1, num_classes=8, conv_num=32):
         super(Classifier_ValidateAugmentation, self).__init__()
-        self.name = name
-        self.model_config = f'in_channels={in_channels}, num_classes={num_classes}, conv_num={conv_num}'
+        self.config = {
+            'name': name,
+            'in_channels': in_channels,
+            'num_classes': num_classes,
+            'conv_num': conv_num,
+        }
 
         # Keras: conv_num = 32, fullnet_num = 128
         C1 = conv_num          # 32
@@ -164,9 +168,10 @@ def train_cls(model, train_loader, criterion, optimizer, scheduler=None, epochs=
     time_duration = time_end - time_start
     times = (time_start, time_duration, time_end)
 
-    dataloader_name = train_loader.name if hasattr(train_loader, 'name') else None
+    # dataloader_name = train_loader.name if hasattr(train_loader, 'name') else None
 
-    return log_loss, log_lr, times, dataloader_name
+    # return log_loss, log_lr, times, dataloader_name
+    return log_loss, log_lr, times, train_loader.config
 
 
 
@@ -222,7 +227,7 @@ def validate_cls(model, validation_loader, defect_types, model_config: str):
     # macro_avg_acc = np.diag(cm[:38]).mean() # 38 是因為 cm 裡面有一個多出來的類別 'XXX', 所以要取前 38 個類別的對角線值來計算 macro average accuracy.
     # model_config += f'\nmacro average accuracy = {macro_avg_acc:.4f}'
     
-    title = f'Confusion Matrix of {model.name}\n--------------------\n{model_config}'
+    title = f'Confusion Matrix of {model.config["name"]}\n--------------------\n{model_config}'
 
     fig = plot_confusion_matrix(cm, defect_types, title=title, times=times)
     

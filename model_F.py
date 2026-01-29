@@ -109,14 +109,25 @@ class A_FeatureAssociation(nn.Module):
         
         self.stitch_out_channels = stitch_out_channels
         self.qk_channel = qk_channels
-        # self.tau = nn.Parameter(torch.tensor(tau).to(device)) if learnable_tau else tau  # 如果 learnable_tau 為 True, 則 tau 是可學習的參數.
         self.tau = nn.Parameter(torch.tensor(tau)) if learnable_tau else tau  # 這裡是上一行移除 .to(device), 因為要使用 scalar 加速運算. 它會自動把參數放到 model 所在的 device.
         self.epsilon = epsilon
+
+        self.config = {
+            'stitch_out_channels': stitch_out_channels,
+            'qk_channel': qk_channels,
+            'tau': f'{tau} (learnable_tau={learnable_tau})',
+            # 'learnable_tau': learnable_tau,
+            # 'epsilon': epsilon,
+        }
 
         # 用於將 stitching 輸出的特徵圖 gray_prime 和 ref_prime 的通道數轉換為 q 和 k 的通道數.
         self.theta = nn.Conv2d(stitch_out_channels, qk_channels, kernel_size=1)
 
     def get_A_info(self):
+        """Get self.qk_channel.
+        
+        Use self.config to get more detailed info about A."""
+        print('Use self.config to get more detailed info about A.')
         A_info = {
             # 'stitch_out_channels': self.stitch_out_channels,
             'qk_channel': self.qk_channel,
@@ -239,7 +250,8 @@ class F_feature_processing(nn.Module):
     """
 
     # def __init__(self, R_gray, R_ref, stitch_out_channels=64, stitch_out_size=(32, 32), qk_channel=4):
-    def __init__(self, R_ref, stitch_out_channels=64, stitch_out_size=(32, 32), qk_channel=4):
+    def __init__(self, module_R: torch.nn.Module, 
+                 stitch_out_channels=64, stitch_out_size=(32, 32), qk_channel=4):
         
         super(F_feature_processing, self).__init__()
         self.name = 'F'
@@ -247,19 +259,32 @@ class F_feature_processing(nn.Module):
         self.stitch_out_size = stitch_out_size
         self.qk_channel = qk_channel
         # self.R_gray = R_gray
-        self.R_ref = R_ref
-        self.stitch_in_channels = [R_ref.output_channels // 8, R_ref.output_channels // 4, R_ref.output_channels // 2, R_ref.output_channels]
+        self.module_R = module_R
+        self.stitch_in_channels = [module_R.output_channels // 8, module_R.output_channels // 4, module_R.output_channels // 2, module_R.output_channels]
         self.stitcher = FeatureStitchingModule(in_channels=self.stitch_in_channels, out_channels=self.stitch_out_channels, out_size=self.stitch_out_size)#.to(device)
         self.A = A_FeatureAssociation(stitch_out_channels=self.stitch_out_channels, qk_channels=self.qk_channel, learnable_tau=False)#.to(device)
 
+        self.config = {
+            'stitch_out_channels': self.stitch_out_channels,
+            'stitch_out_size': self.stitch_out_size,
+            'qk_channel': self.qk_channel,
+        }
+
     def get_R_info(self):
+        """Get self.module_R.name and self.module_R.output_channels.
+
+        Use self.module_R.config to get more detailed info about R."""
+        print('Use self.module_R.config to get more detailed info about R.')
         R_info = {
-            # 'R_gray': (self.R_gray.name), 
-            'R_ref': f'name={self.R_ref.name}, output_channels={self.R_ref.output_channels}',
+            'R_ref': f'name={self.module_R.name}, output_channels={self.module_R.output_channels}',
         }
         return R_info
     
     def get_F_info(self):
+        """Get self.stitch_out_channels, self.stitch_out_size, self.qk_channel.
+        
+        Use self.config to get more detailed info about F."""
+        print('Use self.config to get more detailed info about F.')
         F_info = {
             'stitch_out_channels': self.stitch_out_channels,
             'stitch_out_size': self.stitch_out_size,
@@ -272,8 +297,8 @@ class F_feature_processing(nn.Module):
     def forward(self, gray_image, ref_image):   # shape=(B, 1, 64, 64)
         # gray_image, ref_image = gray_image.to(device), ref_image.to(device)
         # _, gray_features = self.R_gray(gray_image)  # feature maps are in tuple (f1, f2, f3, f4), which are from layer 1~4. 
-        _, gray_features = self.R_ref(gray_image)  # feature maps are in tuple (f1, f2, f3, f4), which are from layer 1~4. 
-        _, ref_features = self.R_ref(ref_image) # feature maps are in tuple (f1, f2, f3, f4), which are from layer 1~4. 
+        _, gray_features = self.module_R(gray_image)  # feature maps are in tuple (f1, f2, f3, f4), which are from layer 1~4. 
+        _, ref_features = self.module_R(ref_image) # feature maps are in tuple (f1, f2, f3, f4), which are from layer 1~4. 
         
         gray_prime = self.stitcher(gray_features)   # shape=(B, self.stitch_out_channels, (out_size))
         ref_prime = self.stitcher(ref_features) # shape=(B, self.stitch_out_channels, (out_size))

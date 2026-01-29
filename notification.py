@@ -39,7 +39,7 @@ if __name__ == "__main__":
                  '2e9c0926e682': '2008cat.wav',    # '2070'
                  '7d9716d33117': '2008cat.wav',    # 'I7-12700'
                  'IDS-RTX5090': '2008cat.wav',  # 'IDS-RTX5090'
-                 'Nicole': 'D:/Nicole/Master/Lab/Implementation/2008cat.wav',  # '筆電' # 路徑好像有錯? 要檢查一下
+                 'Nicole': r'C:\Nicole\Master_NTUB_11366001\Lab\Implementation\20250627-augmentation on Mixed WM38\2008cat.wav',  # 筆電
                  # 再補桌機 
                  }
 

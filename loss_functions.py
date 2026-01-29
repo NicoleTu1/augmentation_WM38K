@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+# from collections import defaultdict
 
 def dice_loss_wafer(pred, target, eps=1e-6, adjustment=0):
     """
@@ -44,16 +45,16 @@ def gaussian_window(size, sigma=1.5):
         也不宜過大, 否則會導致窗口內的像素權重過於分散, 無法有效捕捉局部結構資訊.
     :return: 高斯窗口
     """
-    # coords = torch.arange(size, dtype=torch.float)    # coords 是 coordinates (座標)
-    coords = torch.arange(size)    # coords 是 coordinates (座標)
+    coords = torch.arange(size)    # coords 是 coordinates (座標). 若 size=11 則回傳 [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10]
+    # ↑ 函式內不指定 dtype=torch.float, 由 torch.autocast 自動決定 dtype.
     
     # 將座標中心化. 例如, size=11, 則 coords = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
     coords -= size // 2 
     
     # 計算高斯分佈 (根據高斯分佈的公式)
     g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))    # gaussian formula for 1D # shape=(size,)
-    # 分子: (2 * sigma ** 2) 是高斯分佈的(標準差的平方乘以 2), 這個值控制高斯分佈的寬度.
-    # 分母: coords ** 2 是將每個座標平方, 這樣可以確保距離中心點越遠的座標, 對應的值越小. 
+    # 分子: coords ** 2 是將每個座標平方, 這樣可以確保距離中心點越遠的座標, 對應的值越小. 
+    # 分母: (2 * sigma ** 2) 是高斯分佈的(標準差的平方乘以 2), 這個值控制高斯分佈的寬度.
     # torch.exp 用於計算 e 的冪次, e 約等於 2.71828, torch.exp 的輸出值域是 (0, +∞). 
     # g 的值域是 (0, 1], 因為當 coords 越接近 0 時, g 越接近 1; 當 coords 越遠離 0 時, g 越接近 0.
 
@@ -95,7 +96,7 @@ def ssim_wafer(pred, target, window_size=11, epsilon=1e-7, reduction='mean', adj
     # ↑ window 就是卷積核, shape=(C, 1, window_size, window_size)
     
     # 計算平均數
-    # ↓ 利用 F.conv2d 的功能, 以矩陣運算的方式, 在多個獨立的通道上同時、高效地計算局部 mu. 
+    # ↓ 利用 F.conv2d 的功能, 以矩陣運算的方式, 在多個獨立的通道上同時計算局部 mu. 
     # 這比使用迴圈（for loop）來逐點計算要快得多, 也更符合 GPU 的平行運算特性. 
     mu1 = F.conv2d(pred, window, padding=window_size//2, groups=pred.size(1))
     mu2 = F.conv2d(target, window, padding=window_size//2, groups=target.size(1))
@@ -131,12 +132,6 @@ def ssim_wafer(pred, target, window_size=11, epsilon=1e-7, reduction='mean', adj
     # 常數項 C 是為了防止分母為零,  並且應與輸入數據的動態範圍 L 有關: C2 = (k2 * L) ** 2 
     # Gemini: 標準 SSIM 常數計算, 通常 k_2=0.03 (待求證). 而 L 在晶圓圖中是 1 (因為輸入圖像已經被正規化到 [0, 1] 範圍內).
     C3 = (0.03 * 1) ** 2 / 2  
-    # print('(ssim_wafer): ')
-    # print(f'{sigma1_sq.min()}, {sigma1_sq.max()}')
-    # print(f'{sigma2_sq.min()}, {sigma2_sq.max()}')
-    # print(f'{sigma12.min()}, {sigma12.max()}')
-    # print(f'分子={(sigma12 + C3).min()}, {(sigma12 + C3).max()}')
-    # print(f'分母={(torch.sqrt(sigma1_sq * sigma2_sq) + C3).min()}, {(torch.sqrt(sigma1_sq * sigma2_sq) + C3).max()}')
     ssim_loss = (sigma12 + C3) / (torch.sqrt(sigma1_sq * sigma2_sq) + C3) # range=[-1, 1]
     ssim_loss = ssim_loss.clamp(min=-1.0, max=1.0)  # SSIM 的值域理論上是 [-1, 1], 但有時候計算會超出這個範圍, 所以進行 clamp.
 
@@ -158,7 +153,7 @@ def ssim_wafer(pred, target, window_size=11, epsilon=1e-7, reduction='mean', adj
 def kld_loss_wafer(mu, logvar, batch_size, adjustment=0):
     """
     計算 KL 散度損失 (Kullback-Leibler Divergence Loss) 用於變分自編碼器 (VAE).
-    KL 散度衡量兩個機率分佈之間的差異。在 VAE 中, 我們希望潛在變數的分佈接近標準正態分佈 N(0, I).
+    KL 散度衡量兩個機率分佈之間的差異。在 VAE 中, 我們希望潛在變數的分佈接近標準態分佈 N(0, I).
     這樣可以確保潛在空間的連續性和可解釋性, 並促進生成樣本的多樣性.
 
     :param mu: 潛在變數的均值
@@ -167,15 +162,47 @@ def kld_loss_wafer(mu, logvar, batch_size, adjustment=0):
     """
     # 原始公式 = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / batch_size
 
-    # assert_nan_and_inf(mu, f'kld_loss_wafer: mu')
-    # assert_nan_and_inf(logvar, f'kld_loss_wafer: logvar')
-    # assert_nan_and_inf(logvar.exp(), f'kld_loss_wafer: logvar.exp()')
-
     kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1) # / batch_size
     # dim=1 的意思是對每個樣本的所有潛在維度求和, 因為 mu/logvar 的 shape 是 (B, latent_dim)
     # assert_nan_and_inf(kld_loss, f'kld_loss_wafer: kld_loss')
 
     return kld_loss.mean()  # 回傳 batch 中所有樣本的平均 KLD loss
+
+
+
+class KL_Annealer:
+    """
+    KLD 損失的線性退火排程器. 
+    在總共 total_steps 步內, 將權重 weight 從 0.0 增加到 max_weight. 
+
+    退火的總步數一般不會將直接設定為 `epochs * batches`. 
+    這是因為 KLD 退火的目標是讓模型平穩地開始訓練, 而不是讓 KLD 懲罰在整個訓練週期內都處於線性增長狀態. 
+    一旦模型學會了有意義的重構, 並且 KLD 懲罰已經被充分引入（即 `weight`or`beta` 達到 `1.0`）, 就不需要繼續退火了.  
+    """
+    def __init__(self, total_steps: int, max_weight: float = 1.0):
+        self.total_steps = total_steps
+        self.max_weight = max_weight
+        self.current_step = 0
+    
+    def step(self):
+        """每訓練一個 batch 就呼叫一次, 並增加步數. """
+        self.current_step += 1
+        # print(f'(KL_Annealer) current_step: {self.current_step}/{self.total_steps}, weight: {self.get_weight():.4f}', end='\r')
+    
+    def get_weight(self) -> float:
+        """計算目前的 weight 權重因子. """
+        if self.current_step >= self.total_steps:
+            # 達到總步數後, weight 保持在最大值
+            return self.max_weight
+        
+        # 線性增加： weight = max_weight * (當前步數 / 總步數)
+        weight = self.max_weight * (self.current_step / self.total_steps)
+        return weight
+
+# 假設範例：
+# 100 個 Epochs, 每個 Epoch 200 個 Batch
+# total_steps = 100 * 200 = 20000 步
+# annealer = KL_Annealer(total_steps=20000, max_weight=1.0)
 
 
 
@@ -193,6 +220,79 @@ def mse_loss_wafer(x_recon, x, batch_size, adjustment=0):
     mse_loss = F.mse_loss(x_recon, x, reduction='sum') / batch_size # 計算 "每張圖的平均誤差" (per image loss)
 
     return mse_loss
+
+
+
+
+# def contextual_loss_wafer(x_recon, x, h=0.3):
+#     """
+#     計算 Contextual Loss. 這個 loss 用於衡量兩張圖像在特徵空間中的相似度，特別適合用於圖像重建和生成任務中。
+#     Contextual Loss 的優點在於它能夠捕捉圖像的語義資訊，而不僅僅是像素級的差異，這對於晶圓圖這類結構化圖像尤為重要。
+#     參考文獻: Mechrez et al., "The Contextual Loss for Image Transformation with Non-Aligned Data", ECCV 2018.
+#     連結: https://arxiv.org/abs/1803.02077
+
+#     :param x_recon: 重建後的圖像特徵
+#     :param x: 原始圖像特徵
+#     :param h: 縮放參數，控制相似度敏感度
+#     """
+#     # 將張量重新排列以進行矩陣乘法
+#     x_recon_flat = x_recon.view(x_recon.shape[0], x_recon.shape[1], -1)
+#     x_gt_flat = x.view(x.shape[0], x.shape[1], -1)
+    
+#     # 計算 L2 距離
+#     dist_xy = torch.cdist(x_recon_flat, x_gt_flat, p=2)
+#     dist_xx = torch.cdist(x_recon_flat, x_recon_flat, p=2)
+    
+#     # 計算相似度
+#     sim_xy = torch.exp(-dist_xy**2 / (h**2 + 1e-5)) # 若 dist_xy 很大, 則 sim_xy 會趨近於 0
+#     sim_xx = torch.exp(-dist_xx**2 / (h**2 + 1e-5)) # 若 dist_xx 很大, 則 sim_xx 會趨近於 0
+    
+#     # 計算 Contextual Loss
+#     loss = -torch.log(sim_xy.min(dim=2)[0] / (sim_xx.min(dim=2)[0] + 1e-5)) 
+#     assert not torch.isnan(loss).any(), f'Contextual Loss is NaN! sim_xy.min: {sim_xy.min()}, sim_xx.min: {sim_xx.min()}'
+#     assert not torch.isinf(loss).any(), f'Contextual Loss is Inf! sim_xy.min: {sim_xy.min()}, sim_xx.min: {sim_xx.min()}'
+#     return loss.mean()
+
+
+
+# ########## perceptual loss ##########
+# 感知損失 (Perceptual Loss) 是一種基於高層特徵的損失函數，通常用於圖像生成和圖像超分辨率等任務中。
+# 它藉由比較"生成圖像"和"目標圖像"在某個 CNN 中的高層特徵來衡量兩者之間的差異，所以必須使用預訓練的 CNN 模型來提取這些特徵。
+# 這邊直接使用 R_ref 來計算感知損失, 因為 R_ref 已經是預訓練好的特徵提取器.
+
+# 感知損失的優點在於它能夠捕捉圖像的高層次結構和語義資訊，而不僅僅是像素級別的差異，這使得生成的圖像在視覺上更具吸引力和真實感。
+# 在晶圓圖著色的任務中，感知損失可以幫助模型生成更符合人類視覺感知的細節和紋理，從而提升生成圖像的質量。 --> 晶圓圖不需要太多細節跟紋理吧...? #######
+# MSE 損失: 強制模型在像素層面保持基本結構和顏色。
+# Perceptual 損失: 引導模型生成更符合人類視覺感知的細節和紋理。
+
+# for param in R_ref.parameters():
+#     param.requires_grad = False
+
+# class PerceptualLoss_Rref(nn.Module):
+#     def __init__(self, feature_layer=4):
+#         super(PerceptualLoss_Rref, self).__init__()
+#         self.feature_extractor = nn.Sequential(*list(R_ref.children())[:feature_layer]).eval()
+#         self.mse_loss = nn.MSELoss()
+
+#     def forward(self, x_rec, x_gt):
+#         # # 確保輸入是三通道 #### 原始的程式碼使用VGG 所以必須把input轉成3通道. 但這邊使用 R_ref, 所以不需要轉成3通道.
+#         # if x_rec.shape[1] == 1:
+#         #     x_rec = x_rec.repeat(1, 3, 1, 1)
+#         # if x_gt.shape[1] == 1:
+#         #     x_gt = x_gt.repeat(1, 3, 1, 1)
+
+#         features_rec = self.feature_extractor(x_rec)
+#         features_gt = self.feature_extractor(x_gt)
+        
+#         loss = self.mse_loss(features_rec, features_gt)
+#         return loss
+
+# # 初始化感知損失函式
+# perceptual_loss_fn = PerceptualLoss_Rref().to(device)
+
+# def perceptual_loss_wafer(x_recon, x):
+#     return perceptual_loss_fn(x_recon, x)
+
 
 
 
@@ -258,7 +358,6 @@ def mse_loss_wafer(x_recon, x, batch_size, adjustment=0):
 
 
 
-from collections import defaultdict
 
 def loss_function_colorizeVAE(x_recon, x, mu, logvar, 
                               loss_weights: dict[list[float, float]], 
@@ -286,20 +385,12 @@ def loss_function_colorizeVAE(x_recon, x, mu, logvar,
     # assert_nan_and_inf(mu, f'loss_function_colorizeVAE: mu')
     # assert_nan_and_inf(logvar, f'loss_function_colorizeVAE: logvar')
 
-    # normalize weights. make sum of weights = 1 → 在外面做就好了, 不然每次呼叫這個函式都要做 normalization 很浪費效能
-    # loss_weight_sum = sum([weight[0] for weight in loss_weights.values() if weight[0] > 0])
-    # if loss_weight_sum > 0: # 為了避免除以 0, 所以先檢查 sum 是否大於 0
-    #     for loss_label in loss_weights.keys():
-    #         if loss_weights[loss_label][0] > 0: loss_weights[loss_label][0] /= loss_weight_sum
-
     batch_size = x_recon.size(0)
     each_loss = {}
-    # each_loss_note = defaultdict(str)  # 用於記錄每個損失的計算細節
     
     # def assert_nan_inf_for_loss_component(each_loss, loss_label, x_recon, x):
     #     assert not torch.isnan(each_loss[loss_label]).any(), f"{loss_label} is NaN! Check inputs. x_recon.max(): {x_recon.max():.9f}, x_recon.min(): {x_recon.min():.9f}, x.max(): {x.max():.9f}, x.min(): {x.min():.9f}"
     #     assert not torch.isinf(each_loss[loss_label]).any(), f"{loss_label} is Inf! Check inputs. x_recon.max(): {x_recon.max():.9f}, x_recon.min(): {x_recon.min():.9f}, x.max(): {x.max():.9f}, x.min(): {x.min():.9f}"
-
 
     # print(f'(loss function) statistic: {statistic}') ##### debug
     for loss_label, (weight, adjustment) in loss_weights.items():
@@ -315,22 +406,25 @@ def loss_function_colorizeVAE(x_recon, x, mu, logvar,
             loss_value = dice_loss_wafer(x_recon, x)
         elif (loss_label == 'ssim'):  # SSIM Loss (保持結構相似性)
             loss_value = ssim_wafer(x_recon, x, window_size=window_size, reduction='mean')  
+        else:
+            raise ValueError(f'The loss label "{loss_label}" is not recognized. Supported labels are: mse, kld, dice, ssim.')
         # each_loss[loss_label] = loss_value  # 儲存原始的 loss value, 尚未經過 normalization 和 adjustment
 
-        # # 處理正規化. 若 normalization_method == 'none', 則 normalize_loss 會直接回傳原始的 loss_value
+        # # 處理正規化. 
+        # 若 normalization_method == 'none', 則 normalize_loss 會直接回傳原始的 loss_value
         # if isinstance(normalization_method, str):   # 只做一個正規化方法
-        #     loss_value = normalize_loss(loss_label, loss_value, each_loss_note, statistic, method=normalization_method)
+        #     loss_value = normalize_loss(loss_label, loss_value, statistic, method=normalization_method)
         # elif isinstance(normalization_method, list):# 做多個正規化方法
         #     for method in normalization_method:
-        #         loss_value = normalize_loss(loss_label, loss_value, each_loss_note, statistic, method=method)
+        #         loss_value = normalize_loss(loss_label, loss_value, statistic, method=method)
         # else:
         #     raise ValueError(f'normalization_method must be str or list. But got {type(normalization_method)}')
         # each_loss[loss_label] = loss_value      # 儲存經過 normalization 後的 loss value
 
         # 處理 adjustment
         if adjustment != 0:
-            # each_loss_note[loss_label] = f'{loss_label} adjustment={adjustment}'
-            loss_value = torch.abs(loss_value - adjustment)  # Take absolute value to ensure non-negativity
+            # loss_value = torch.abs(loss_value - adjustment)
+            loss_value = torch.clamp(loss_value - adjustment, min=0) + adjustment  # Take absolute value to ensure non-negativity
             
         each_loss[loss_label] = loss_value      # 儲存經過 normalization 和 adjustment 後的 loss value
 
@@ -339,28 +433,11 @@ def loss_function_colorizeVAE(x_recon, x, mu, logvar,
 
     # 總損失
     total_loss = 0
-    # loss_equation_str = ''
     for loss_label, (weight, adjustment) in loss_weights.items():
         if weight != 0:
             # loss_value_weighted = goal_percent * (weight * each_loss[loss_label])
             loss_value_weighted = weight * each_loss[loss_label]
             total_loss += loss_value_weighted
-            # if normalization_method != ['none']: # 如果有提供 normalization_method, 就是經過標準化
-            #     normalization_process_str = ''
-            #     for method in reversed(normalization_method) if isinstance(normalization_method, list) else [normalization_method]:  # reversed 是因為 loss 計算式是從內到外的
-            #         normalization_process_str += f'{method}('
-            #     left_parentheses = ')' * len(normalization_method)
-            #     loss_equation_str += f'{loss_weights[loss_label][0]:.3f} * {normalization_process_str}(|{loss_label}-{loss_weights[loss_label][1]}|){left_parentheses} + '
-            # else: # 沒做標準化
-            #     loss_equation_str += f'{loss_weights[loss_label][0]:.3f} * (|{loss_label}-{loss_weights[loss_label][1]}|) + '            
-            # loss_equation_str += f'{loss_weights[loss_label][0]:.3f} * (|{loss_label}-{loss_weights[loss_label][1]}|) + '            
-
-    # loss_equation_str = loss_equation_str.rstrip(' + ')
-    # if goal_percent != 1: loss_equation_str = f'{goal_percent} * [{loss_equation_str}]'
 
 
-    # print(f'(loss function) total_loss.item(): {total_loss.item():.9f}')  ##### debug
-    # assert_nan_and_inf(total_loss, f'loss_function_colorizeVAE: total_loss')
-
-    return total_loss, '', each_loss, ''
-    # return total_loss, loss_equation_str, each_loss, each_loss_note
+    return total_loss, each_loss, ''

@@ -4,7 +4,10 @@ import numpy as np
 
 import datetime
 import time 
-from IPython.display import Audio, display, Javascript
+import sys
+import psutil
+import winsound # pygame
+# from IPython.display import Audio, display, Javascript
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable 
@@ -25,15 +28,16 @@ labels_in_code = ['none', 'Random', 'Scratch', 'Near_Full', 'Loc',
                   'D+EL+L+S', 'Center', 'C+S', 'C+L', 'C+L+S', 
                   'C+ER', 'C+ER+S', 'C+ER+L', 'C+ER+L+S', 'C+EL', 
                   'C+EL+S', 'C+EL+L', 'C+EL+L+S', 'XXX']
-# 以下是取得 labels_in_code, label_to_code, code_to_label 的程式碼, 先註解起來備用.
+
+# # 以下是取得 labels_in_code, label_to_code, code_to_label 的程式碼, 先註解起來備用.
 # # # 為了後續畫 cm 的時候可以美觀一點, 將缺陷類別轉換成更簡短的名稱
 # # # defect_vector_means 是缺陷類型的全名, defect_vector_means_short 是缺陷類型的簡短名稱.
 # # defect_vector_means = ('Center', 'Donut', 'Edge_Loc', 'Edge_Ring', 'Loc', 'Near_Full', 'Scratch', 'Random')
 # # defect_vector_means_short = ('C', 'D', 'EL', 'ER', 'L', 'NF', 'S', 'R')
-
-# # defect_types, counts = np.unique(dataset_raw['arr_1'], return_counts=True, axis=0)
-# # np.unique(counts)
 # # labels_in_code = []
+# # label_to_code, code_to_label = {}, {}
+
+# # defect_types, counts = np.unique(dataset_raw['arr_1'], return_counts=True, axis=0)	# 取出原始label (0/1陣列)
 # # for vector in defect_types:
 # #     label = ''
 # #     if sum(vector) == 0:
@@ -45,10 +49,10 @@ labels_in_code = ['none', 'Random', 'Scratch', 'Near_Full', 'Loc',
 # #             if d == 1: label += defect_vector_means_short[i] + '+'
 # #         label = label.rstrip('+')  # 去掉最後的 '+'
 # #     labels_in_code.append(label)
-# # labels_in_code.append('XXX')    # 若有其他類型的缺陷, 用 'XXX' 來表示
 
-# # label_to_code = {tuple(k.tolist()): labels_in_code[i] for i, k in enumerate(defect_types)}
-# # code_to_label = {labels_in_code[i]: tuple(k.tolist()) for i, k in enumerate(defect_types)}
+# #     label_to_code[label] = tuple(vector.tolist())   # 將 label (字串) 轉成 0/1 陣列
+# #     code_to_label[tuple(vector.tolist())] = label   # 將 0/1 陣列 轉成 label (字串)
+# # labels_in_code.append('XXX')    # 若有其他類型的缺陷, 用 'XXX' 來表示. 畫混淆矩陣的時候會用到. 
 
 label_to_code = {(0, 0, 0, 0, 0, 0, 0, 0): 'none',
                  (0, 0, 0, 0, 0, 0, 0, 1): 'Random',
@@ -130,37 +134,25 @@ code_to_label = {'none': (0, 0, 0, 0, 0, 0, 0, 0),
 
 
 
-# defect_vector_means = ('Center', 'Donut', 'Edge_Loc', 'Edge_Ring', 'Loc', 'Near_Full', 'Scratch', 'Random')
-# defect_vector_means_short = ('C', 'D', 'EL', 'ER', 'L', 'NF', 'S', 'R')
-
-# labels_in_code = []
-# # for vector in defect_types:
-# for vector in label_to_code.keys():
-#     label = ''
-#     if sum(vector) == 0:
-#         label = 'none'
-#     elif sum(vector) == 1:
-#         label = defect_vector_means[vector.argmax()]
-#     else:
-#         for i, d in enumerate(vector):
-#             if d == 1: label += defect_vector_means_short[i] + '+'
-#         label = label.rstrip('+')  # 去掉最後的 '+'
-#     labels_in_code.append(label)
-# labels_in_code.append('XXX')    # 若有其他類型的缺陷, 用 'XXX' 來表示
-
-# label_to_code = {tuple(k.tolist()): labels_in_code[i] for i, k in enumerate(defect_types)}
-# label_to_code = {tuple(k.tolist()): labels_in_code[i] for i, k in enumerate(label_to_code.keys())}
-
-
-
 class Logger():
     """Logger class to log messages to both console and file."""
     def __init__(self, log_file_path=r'log_to_file.log', hostname: str=''):
         self.log_file_path = log_file_path
         self.hostname = hostname
         self.initialize()
-        self.audio_file_path = '2008cat.wav'
-        # self.notification_sound = Audio(self.audio_file_path, autoplay=True) # 建立一個 Audio 物件
+
+        # hostname = socket.gethostname()
+        self.audio_path_list = {
+            'e2e24780b959': '2008cat.wav',    # '5070Ti'
+            '2e9c0926e682': '2008cat.wav',    # '2070'
+            '7d9716d33117': '2008cat.wav',    # 'I7-12700'
+            'IDS-RTX5090': '2008cat.wav',  # 'IDS-RTX5090'
+            'Nicole': r'C:\Nicole\Master_NTUB_11366001\Lab\Implementation\20250627-augmentation on Mixed WM38\2008cat.wav',  # 筆電
+            # 再補桌機 
+            }
+        hostname = hostname[hostname.find('=')+1:-1]
+        self.audio_path = self.audio_path_list.get(hostname, '2008cat.wav')  # 預設音效檔案
+        self.play_notification_sound()
 
     def initialize(self):
         time_now = datetime.datetime.now()
@@ -168,30 +160,65 @@ class Logger():
         with open(self.log_file_path, 'w') as f: # 'w': write 模式, 清空舊內容
             f.write(f"[{time_now}] [NOTEBOOK] Initialized.\n")
             f.write(f"[{time_now}] [NOTEBOOK] Running on server: {self.hostname}\n")
-        self.log_system_info()
+        self.log_GPU_info()
+        self.log_CPU_info()
+        self.log_RAM_info()
+        self.log_development_env_info()
 
-    def log_system_info(self):
-        self.log(f'torch.device: {device}')
+    def log_GPU_info(self):
+        message = '----- GPU Information -----\n'
         if torch.cuda.is_available():
-            self.log(f'GPU Name: {torch.cuda.get_device_name(0)}')   
-            self.log(f'GPU Capability: {torch.cuda.get_device_capability(0)}')
-            self.log(f'GPU Memory Allocated: {torch.cuda.memory_allocated(0)} bytes')
-            self.log(f'GPU Memory Cached: {torch.cuda.memory_reserved(0)} bytes')
-            self.log(f'GPU Memory Total: {torch.cuda.get_device_properties(0).total_memory} bytes')
-            self.log(f'GPU Memory Free: {torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved(0)} bytes')
-            self.log(f'GPU Memory Utilization: {torch.cuda.memory_allocated(0) / torch.cuda.get_device_properties(0).total_memory * 100:.2f}%')
+            message += f'GPU Name: {torch.cuda.get_device_name(0)}\n'
+            message += f'GPU Capability: {torch.cuda.get_device_capability(0)}\n'
+            message += f'GPU Memory Allocated: {torch.cuda.memory_allocated(0)} bytes\n'
+            message += f'GPU Memory Cached: {torch.cuda.memory_reserved(0)} bytes\n'
+            message += f'GPU Memory Total: {torch.cuda.get_device_properties(0).total_memory} bytes\n'
+            message += f'GPU Memory Free: {torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved(0)} bytes\n'
+            message += f'GPU Memory Utilization: {torch.cuda.memory_allocated(0) / torch.cuda.get_device_properties(0).total_memory * 100:.2f}%\n'
         else: 
-            self.log('torch.cuda.is_available() == False', is_print=True)
+            message += 'torch.cuda.is_available() == False\n'
 
-        import sys
-        self.log(f'Python Version: {sys.version}') 
-        self.log(f'PyTorch Version: {torch.__version__}')
-        self.log(f'CUDA Version: {torch.version.cuda}')
-        self.log(f'cuDNN Version: {torch.backends.cudnn.version()}')
+        self.log(message)
+
+    def log_CPU_info(self):
+        message = '----- CPU Information -----\n'
+        # 1. 核心數
+        message += f"the number of physical cores: {psutil.cpu_count(logical=False)}\n"    # 實體核心數
+        message += f"the number of logical CPUs: {psutil.cpu_count(logical=True)}\n"   # 邏輯核心數
+
+        # 2. CPU 頻率 (單位: MHz)
+        cpu_freq = psutil.cpu_freq()
+        if cpu_freq:
+            message += f"current frequency: {cpu_freq.current:.2f}MHz\n"
+            message += f"max frequency: {cpu_freq.max:.2f}MHz\n"
+
+        # 3. CPU 使用率 (每個核心)
+        for i, percentage in enumerate(psutil.cpu_percent(interval=1, percpu=True)):
+            message += f"core {i} usage: {percentage}%\n"
+
+        self.log(message)
+
+    def log_RAM_info(self):
+        message = '----- RAM Information -----\n'
+        virtual_mem = psutil.virtual_memory()
+        message += f"Total RAM: {virtual_mem.total / (1024 ** 3):.2f} GB\n"
+        message += f"Available RAM: {virtual_mem.available / (1024 ** 3):.2f} GB\n"
+        message += f"Used RAM: {virtual_mem.used / (1024 ** 3):.2f} GB\n"
+        message += f"RAM Usage Percentage: {virtual_mem.percent}%\n"
+        self.log(message)
+
+    def log_development_env_info(self):
+        message = '----- Development Environment Information -----\n'
+        message += f'Python Version: {sys.version}\n'
+        message += f'PyTorch Version: {torch.__version__}\n'
+        message += f'torch.device: {device}\n'
+        message += f'CUDA Version: {torch.version.cuda}\n'
+        message += f'cuDNN Version: {torch.backends.cudnn.version()}\n'
+        self.log(message)
 
     def log(self, message: str='', is_print: bool=False):
         time_now = datetime.datetime.now()
-        with open(self.log_file_path, 'a') as f: # 'a': append 模式, 確保每次寫入都會在檔案末尾追加, 而不是覆蓋舊內容. 
+        with open(self.log_file_path, 'a') as f: # 'a': append 模式, 在檔案末尾加入內容, 而不是覆蓋舊內容. 
             if message != '':
                 f.write(f"[{time_now}] [NOTEBOOK] {message}\n")
                 if is_print: print(message)
@@ -199,53 +226,71 @@ class Logger():
                 f.write("----------     ----------\n")
 
     def play_notification_sound(self):
-        display(self.notification_sound) 
-        js_code = """
-        // 使用 setTimeout 延遲 500 毫秒，給予 DOM 充分的渲染時間
-        setTimeout(function() {
-            var audio_element = document.querySelector('audio');
-            if (audio_element) {
-                // 嘗試播放
-                audio_element.play().catch(function(error) {
-                    console.warn("Autoplay blocked by browser policy, fallback to click.", error);
-                });
-            }
-        }, 500);
-        """
-        display(Javascript(js_code))
+        # 用 winsound 播放, 只支援 wav 格式. 若要播放 mp3, 需要使用 playsound
+        try:
+            winsound.PlaySound(self.audio_path, winsound.SND_ASYNC)
+            # 第二個參數稱為 「標記（Flags）」. 它的作用是告訴 Windows:「第一個參數到底是什麼東西？以及你要怎麼播放它？」
+            # 設為 SND_FILENAME: 播放檔案
+            # 設為 SND_ASYNC: 非同步播放 (程式不會卡住，會繼續執行)
+        except Exception as e:
+            print(f"播放音效出錯: {e}")
+
+        # ↓↓ 用 pygame 播放. 但 pygame 太大了, 不適合只為了播放音效而匯入.
+        # # try:
+        # #     # 1. 初始化混音器 (只需要執行一次)
+        # #     # 參數設定通常為 44.1 kHz, 16 位元, 單聲道
+        # #     pygame.mixer.init(frequency=44100, size=-16, channels=1) 
+            
+        # #     # 2. 載入音效檔案
+        # #     # Pygame 支援 WAV, MP3, OGG 等多種格式
+        # #     pygame.mixer.music.load(self.audio_path)
+            
+        # #     # 3. 播放
+        # #     pygame.mixer.music.play()
+            
+        # #     # 4. 關鍵：確保程式暫停足夠長的時間讓音效播放完畢
+        # #     # 這裡需要根據音效長度來設定延遲
+        # #     while pygame.mixer.music.get_busy():
+        # #         time.sleep(0.1)
+
+        # # except Exception as e:
+        # #     print(f"使用 Pygame 播放音效時出錯: {e}")
+        # # finally:
+        # #     # 確保在程式結束前停止混音器
+        # #     pygame.mixer.quit()
 
 
 
-def log_to_file(message: str=False, log_file_path=r'log_to_file.log', is_initialize: bool=False, hostname: str='', is_print: bool=False):
-    """
-    將帶有時間戳記的訊息寫入指定檔案。
+# def log_to_file(message: str=False, log_file_path=r'log_to_file.log', is_initialize: bool=False, hostname: str='', is_print: bool=False):
+#     """
+#     將帶有時間戳記的訊息寫入指定檔案. 
 
-    ### 適用情境
-    在終端機使用指令 `nohup jupyter nbconvert --to notebook --execute ...` 指令執行 ipynb 檔案時, 
-    無法直接在終端機看到 print 訊息, 可改用此函式將訊息寫入檔案.
+#     ### 適用情境
+#     在終端機使用指令 `nohup jupyter nbconvert --to notebook --execute ...` 指令執行 ipynb 檔案時, 
+#     無法直接在終端機看到 print 訊息, 可改用此函式將訊息寫入檔案.
 
-    :param message: 要寫入的訊息. 若無輸入, 則印出`----------     ----------`
-    :param log_file_path: 要寫入的檔案路徑. 預設為 `log_to_file.log`
-    :param is_initialize: 是否為初始化動作. 若為 True, 則會清空舊內容並寫入初始化訊息, 並且必須提供 `hostname`. 
-    :param is_print: 是否同時將訊息印出到終端機. 預設為 False.
-    """
-    time_now = datetime.datetime.now()
-    if is_initialize:        
-        assert hostname != '', "When `is_initialize` is True, `hostname` must be provided."
-        with open(log_file_path, 'w') as f: # 'w': write 模式, 清空舊內容
-            f.write(f"[{time_now}] [NOTEBOOK] Initialized.\n")
-            f.write(f"[{time_now}] [NOTEBOOK] Running on server: {hostname}\n")
-    else:
-        with open(log_file_path, 'a') as f: # 'a': append 模式, 確保每次寫入都會在檔案末尾追加, 而不是覆蓋舊內容. 
-            if message:
-                if is_print: print(message)
-                f.write(f"[{time_now}] [NOTEBOOK] {message}\n")
-            else:
-                f.write("----------     ----------\n")
+#     :param message: 要寫入的訊息. 若無輸入, 則印出`----------     ----------`
+#     :param log_file_path: 要寫入的檔案路徑. 預設為 `log_to_file.log`
+#     :param is_initialize: 是否為初始化動作. 若為 True, 則會清空舊內容並寫入初始化訊息, 並且必須提供 `hostname`. 
+#     :param is_print: 是否同時將訊息印出到終端機. 預設為 False.
+#     """
+#     time_now = datetime.datetime.now()
+#     if is_initialize:        
+#         assert hostname != '', "When `is_initialize` is True, `hostname` must be provided."
+#         with open(log_file_path, 'w') as f: # 'w': write 模式, 清空舊內容
+#             f.write(f"[{time_now}] [NOTEBOOK] Initialized.\n")
+#             f.write(f"[{time_now}] [NOTEBOOK] Running on server: {hostname}\n")
+#     else:
+#         with open(log_file_path, 'a') as f: # 'a': append 模式, 在檔案末尾加入內容, 而不是覆蓋舊內容. 
+#             if message:
+#                 if is_print: print(message)
+#                 f.write(f"[{time_now}] [NOTEBOOK] {message}\n")
+#             else:
+#                 f.write("----------     ----------\n")
 
 
 
-def time_calculate_duration(seconds):
+def convert_seconds_to_hms(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = seconds % 60
@@ -253,7 +298,7 @@ def time_calculate_duration(seconds):
 
 
 
-def timestamp_to_strftime(timestamps: tuple, format: str='%Y%m%d-%H%M%S(%z)', 
+def convert_timestamps_to_strings(timestamps: tuple, format: str='%Y%m%d-%H%M%S(%z)', 
                           columns: list[str]=['start', 'duration', 'end']) -> str:
     """
     Convert timestamps to a formatted string.
@@ -273,7 +318,7 @@ def timestamp_to_strftime(timestamps: tuple, format: str='%Y%m%d-%H%M%S(%z)',
             if not columns:
                 times_struct.append(time_formatted)
             elif columns[i] == 'duration':  # 持續時間不需要顯示年月日, 只需要顯示時分秒
-                time_formatted = time_calculate_duration(timestamp)
+                time_formatted = convert_seconds_to_hms(timestamp)
                 times_struct.append(f'duration: {time_formatted}')
             else:
                 times_struct.append(f'{columns[i]}: {time_formatted}')
@@ -281,59 +326,59 @@ def timestamp_to_strftime(timestamps: tuple, format: str='%Y%m%d-%H%M%S(%z)',
     
 
 
-##### ---------- Generating Perfect WaferMap ---------- #####
-def generate_perfect_wafermap_and_label(n_batch: int, size: tuple=(64, 64)) -> torch.Tensor:
-# def generate_perfect_wafermap_and_label(n_batch: int, size: tuple=wafer_resize_scale) -> torch.Tensor:
-    """
-    Generate a perfect wafer map and its corresponding label.   
-    The function uses vectorized operations for efficiency.  這個函式使用向量化運算來提高效率.
+# ##### ---------- Generating Perfect WaferMap ---------- #####
+# def generate_perfect_wafermap_and_label(n_batch: int, size: tuple=(64, 64)) -> torch.Tensor:
+# # def generate_perfect_wafermap_and_label(n_batch: int, size: tuple=wafer_resize_scale) -> torch.Tensor:
+#     """
+#     Generate a perfect wafer map and its corresponding label.   
+#     The function uses vectorized operations for efficiency.  這個函式使用向量化運算來提高效率.
 
-    :param n_batch: Number of wafer maps to generate.
-    :param size: Size of the wafer map as a tuple (height, width). Default is (64, 64).
-    :return: A dictionary containing:
+#     :param n_batch: Number of wafer maps to generate.
+#     :param size: Size of the wafer map as a tuple (height, width). Default is (64, 64).
+#     :return: A dictionary containing:
 
-        * '0': A tensor of shape (n_batch, 1, height, width) representing the perfect wafer maps.
-        * '1': A tensor of shape (n_batch, 8) representing the labels (all zeros).
-    """
-    assert isinstance(size, tuple) and len(size) == 2, "Size must be a tuple of (height, width)."
+#         * '0': A tensor of shape (n_batch, 1, height, width) representing the perfect wafer maps.
+#         * '1': A tensor of shape (n_batch, 8) representing the labels (all zeros).
+#     """
+#     assert isinstance(size, tuple) and len(size) == 2, "Size must be a tuple of (height, width)."
 
-    h, w = size
-    center_x, center_y = w / 2, h / 2
-    radius_sq = (min(h, w) / 2) ** 2    # radius_sq = radius squared = r ** 2
+#     h, w = size
+#     center_x, center_y = w / 2, h / 2
+#     radius_sq = (min(h, w) / 2) ** 2    # radius_sq = radius squared = r ** 2
 
-    # 建立網格座標
-    y, x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing='ij')  # shape: (h, w)
-    # ↑ indexing='ij' 確保 y 對應到第一維 (height), x 對應到第二維 (width).
-    # indexing='xy' 是預設值, 但不適合影像處理
+#     # 建立網格座標
+#     y, x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing='ij')  # shape: (h, w)
+#     # ↑ indexing='ij' 確保 y 對應到第一維 (height), x 對應到第二維 (width).
+#     # indexing='xy' 是預設值, 但不適合影像處理
 
-    # 使用向量化運算判斷像素是否在圓形內
-    dist_sq = (x - center_x + 0.5)**2 + (y - center_y + 0.5)**2 # dist_sq = distance square     # +0.5 是為了讓圓心落在像素的正中央
-    wafermap_perfect = (dist_sq <= radius_sq).float().to(device)    # wafermap value range: 0.0 ~ 1.0
-    # 這邊不用讓 wafermap_perfect 的 range 變得跟原始資料集一樣是 (0, 1, 2), 
-    # 因為 0=未使用, 1=正常, 2=缺陷, 而 perfect wafermap 裡面沒有缺陷, 所以只需要 0 和 1 就夠了.
+#     # 使用向量化運算判斷像素是否在圓形內
+#     dist_sq = (x - center_x + 0.5)**2 + (y - center_y + 0.5)**2 # dist_sq = distance square     # +0.5 是為了讓圓心落在像素的正中央
+#     wafermap_perfect = (dist_sq <= radius_sq).float().to(device)    # wafermap value range: 0.0 ~ 1.0
+#     # 這邊不用讓 wafermap_perfect 的 range 變得跟原始資料集一樣是 (0, 1, 2), 
+#     # 因為 0=未使用, 1=正常, 2=缺陷, 而 perfect wafermap 裡面沒有缺陷, 所以只需要 0 和 1 就夠了.
 
-    wafermap_perfect = wafermap_perfect.expand(n_batch, 1, h, w)
-    # label_perfect = torch.zeros((n_batch, 8), dtype=torch.float).to(device)
-    label_perfect = torch.zeros((n_batch, 8)).to(device)
+#     wafermap_perfect = wafermap_perfect.expand(n_batch, 1, h, w)
+#     # label_perfect = torch.zeros((n_batch, 8), dtype=torch.float).to(device)
+#     label_perfect = torch.zeros((n_batch, 8)).to(device)
 
-    result = {0: wafermap_perfect, 
-              1: label_perfect}
-    return result
-##### ---------- Generating Perfect WaferMap ---------- #####
+#     result = {0: wafermap_perfect, 
+#               1: label_perfect}
+#     return result
+# ##### ---------- Generating Perfect WaferMap ---------- #####
 
 
 
 def get_sample_dtype_and_elementset(wafermap, label, logger: Logger) -> tuple[tuple[str, str], tuple[set, set]]:
     if type(wafermap) == np.ndarray and type(label) == np.ndarray:
-        # 檢查最小單位的 element 的 dtype
+        # 檢查最內層 element 的 dtype
         d = len(wafermap.shape)
         w = wafermap[0]
-        for _ in range(d-1): w = w[0]
+        for _ in range(d-1): w = w[0]   # w = 最內層 element
         dtype_wafermap = type(w)
 
         d = len(label.shape)
         l = label[0]
-        for _ in range(d-1): l = l[0]
+        for _ in range(d-1): l = l[0]   # l = 最內層 element
         dtype_label = type(l)
 
     elif type(wafermap) == torch.Tensor and type(label) == torch.Tensor:
@@ -356,25 +401,35 @@ def get_sample_dtype_and_elementset(wafermap, label, logger: Logger) -> tuple[tu
     message += f'  value:  wafermap  {elements_set_wafermap} \n'
     message += f'          label     {elements_set_label} '
     logger.log(message, is_print=True)
-    # logger.log(f'\tdtype_wafermap: {dtype_wafermap}, elements_set_wafermap: {elements_set_wafermap}', is_print=True)
-    # logger.log(f'\tdtype_label: {dtype_label}, elements_set_label: {elements_set_label}')
     
     return (dtype_wafermap, dtype_label), (elements_set_wafermap, elements_set_label)
 
 
 
+def get_starttime_from_timestamps(timestamps: tuple) -> str:
+    """
+    從 timestamps 中取得起始時間的字串, 格式為`%Y%m%d-%H%M%S(%z)`.
+
+    :param timestamps: A tuple of timestamps in seconds.
+    :return: A formatted string representing the start time in '%Y%m%d-%H%M%S' format.
+    """
+    start_time_str = time.strftime('%Y%m%d-%H%M%S(%z)', time.localtime(timestamps[0]))
+    return start_time_str
+
+
 def assert_sample_compliance(elements_set=(set(), set()), 
                              expected_set_wafermap={0, 0.5, 1}, expected_set_label={0, 1}, 
                              logger: Logger=None):
-# def assert_sample_compliance(sample: tuple, expected_set_wafermap={0, 0.5, 1}, expected_set_label={0, 1}):
     """
     :param sample: (wafermap, label)
     :param expected_set_wafermap: expected set of wafermap elements.
     :param expected_set_label: expected set of label elements.
     """
     elements_set_wafermap, elements_set_label = elements_set[0], elements_set[1]
-    assert elements_set_wafermap.issubset(expected_set_wafermap), f'Wafermap elements {elements_set_wafermap} not compliant with expected set {expected_set_wafermap}'
-    assert elements_set_label.issubset(expected_set_label), f'Label elements {elements_set_label} not compliant with expected set {expected_set_label}'
+    assert elements_set_wafermap.issubset(expected_set_wafermap), \
+        f'Wafermap elements {elements_set_wafermap} not compliant with expected set {expected_set_wafermap}'
+    assert elements_set_label.issubset(expected_set_label), \
+        f'Label elements {elements_set_label} not compliant with expected set {expected_set_label}'
     
     if logger is not None:
         logger.log('(function: assert_sample_compliance) Sample compliance check passed.', is_print=True)
@@ -390,25 +445,17 @@ def assert_nan_and_inf(tensor: torch.Tensor, tensor_name: str='tensor'):
 
 
 def rectify_pixel_values(x:torch.Tensor):
-    # 統一處理 3 維或 4 維張量
-    # if x.dim() not in [3, 4]:
-    #     raise TypeError(f'函式只接受3維或4維的tensor. 輸入的tensor維度為{x.dim()} (shape={x.shape}). ')
-
-    # # 確保 x.max() 不為 0 以避免除以零的錯誤
-    # x_max = x.max()
-    # if x_max > 0:
-    #     x = torch.round(x / x_max * 2) / 2    # 這行程式碼會對整個 x 張量進行操作, 不需要使用 for 迴圈逐個處理
-    # return torch.clamp(x, 0, 1)
+    """
+    將 tensor x 的值限制在 0 和 1 之間, 並將其標準化為 0.0, 0.5, 1.0 三個離散值.
+    """
     if x.dim() in [2, 3, 4]:
-        
         x_max = x.max()
         if x_max > 0: # 確保 x.max() 不為 0 以避免除以零的錯誤
             x = torch.round(x / x_max * 2) / 2    # 這行程式碼會對整個 x 張量進行操作, 不需要使用 for 迴圈逐個處理
         return torch.clamp(x, 0, 1)
-    # elif x.dim() == 2:
         
     else:
-        raise TypeError(f'函式只接受3維或4維的tensor. 輸入的tensor維度為{x.dim()} (shape={x.shape}). ')
+        raise TypeError(f'函式只接受2維、3維或4維的tensor. x.dim()={x.dim()}, x.shape={x.shape}. ')
         
 
 
@@ -497,13 +544,17 @@ def plot_loss_with_lr(model_name: str, log_loss: list, log_lr: list, log_each_lo
     ax2.tick_params(axis='y', labelcolor='tab:red')
     
     # timestamp = time.strftime('%Y%m%d-%H%M%S', time.localtime())
-    times = timestamp_to_strftime(times, columns=['start', 'duration', 'end'])
+    times = convert_timestamps_to_strings(times, columns=['start', 'duration', 'end'])
     times_string = [f'{t}\n' for t in times]
     times_string = ''.join(times_string)
 
     # fig.text(0.95, 0.90, f'timestamp={timestamp}.', transform=fig.transFigure, ha='right', fontsize=10, color='gray')
     fig.text(0.95, 0.89, f'{times_string}', transform=fig.transFigure, ha='right', fontsize=10, color='gray')
-    fig.text(0.06, 0.16, f'model config=\n{model_config}', transform=fig.transFigure, ha='left', va='bottom', fontsize=10, color='gray')
+    if isinstance(model_config, str):
+        fig.text(0.06, 0.16, f'model config=\n{model_config}', transform=fig.transFigure, ha='left', va='bottom', fontsize=10, color='gray')
+    elif isinstance(model_config, dict):
+        model_config_str = '\n'.join([f'{k}: {v}' for k, v in model_config.items()])
+        fig.text(0.06, 0.16, f'model config=\n{model_config_str}', transform=fig.transFigure, ha='left', va='bottom', fontsize=10, color='gray')
     fig.suptitle(f'{model_name}: Loss per Epoch')
     fig.legend()
     fig.tight_layout()
@@ -512,7 +563,9 @@ def plot_loss_with_lr(model_name: str, log_loss: list, log_lr: list, log_each_lo
 
 
 
-def plot_confusion_matrix(confusion_matrix: np.ndarray, defect_types_name: list, title: str='Confusion Matrix of Each Defect Class', times=(-1, -1, -1)) -> plt.Figure:
+def plot_confusion_matrix(confusion_matrix: np.ndarray, defect_types_name: list, 
+                          title: str='Confusion Matrix of Each Defect Class', 
+                          times=(-1, -1, -1)) -> plt.Figure:
     """draw confusion matrix to show accuracy of each defect class"""
     fig, ax = plt.subplots(figsize=(20, 16))
     cax = ax.matshow(confusion_matrix, cmap='Blues')
@@ -586,9 +639,9 @@ def plot_confusion_matrix(confusion_matrix: np.ndarray, defect_types_name: list,
 
 
     # timestamp = time.strftime('%Y%m%d-%H%M%S(%z)', time.localtime())
-    times = timestamp_to_strftime(times, columns=['start', 'duration', 'end'])
-    times_string = [f'{t}\n' for t in times]
-    times_string = ''.join(times_string)
+    times = convert_timestamps_to_strings(times, columns=['start', 'duration', 'end'])
+    times_string = [t for t in times]
+    times_string = '\n'.join(times_string)
     # fig.text(0.85, 0.98, f'timestamp={timestamp}.', transform=fig.transFigure, ha='right', fontsize=10, color='gray')
     fig.text(0.85, 0.95, times_string, transform=fig.transFigure, ha='right', fontsize=10, color='gray')
     plt.tight_layout()
@@ -627,7 +680,7 @@ def plot_cm_as_linechart_for_each_defect_class(cm_augmented: np.ndarray, cm_base
     ax.set_ylim(0, 1)
 
     ax.set_title(title)
-    times = timestamp_to_strftime(times, columns=['start', 'duration', 'end'])
+    times = convert_timestamps_to_strings(times, columns=['start', 'duration', 'end'])
     times_string = [f'{t}\n' for t in times]
     times_string = ''.join(times_string)
     ax.text(0.95, 0.95, f'{times_string}', 
@@ -714,7 +767,7 @@ def plot_colored_wafermaps(timestamp: str, ref_image, ref_label, colored_waferma
                         #    colVAE_loss_function: str=None, 
                            n_row=2, n_col=4):
     """
-    繪製生成的彩色晶圓圖。
+    繪製生成的彩色晶圓圖. 
 
     :param ref_image: 參考影像 (shape: (1, 1, H, W))
     :param colored_wafermaps: 生成的彩色晶圓圖 (shape: (n_sample, 1, H, W))
@@ -778,7 +831,7 @@ def plot_colored_wafermaps(timestamp: str, ref_image, ref_label, colored_waferma
 
     # 加上標題
     fontsize=14 if n_col == 5 else 12
-    title = f'Generated Colored Wafer Maps \nloss_function = {colVAE.loss_function}'
+    title = f'Generated Colored Wafer Maps \nloss_function = {colVAE.config['loss_function']}'
     title += f'\nC.encoder_input_channels={colVAE.encoder_input_channels}, z_dim={colVAE.z_dim}, qk_channel={module_F.qk_channel if module_F is not None else "N/A"}'
     fig.suptitle(title, fontsize=fontsize)
     n_crlf_in_title = title.count('\n')
@@ -790,19 +843,16 @@ def plot_colored_wafermaps(timestamp: str, ref_image, ref_label, colored_waferma
 
 
 
-def save_modelparams(model: nn.Module, optimizer: nn.Module, epochs: int, model_config: str, 
+def save_modelparams(model: nn.Module, optimizer: nn.Module, 
                      log_loss: list, 
-                     loss_function: str=None,
-                     timestamp: str=None, 
+                     timestamps: tuple|list, 
                      pathname: str='record of experiment/', 
                      filename: str=None):
     """
     :param nn.Module model: The model to save.
     :param nn.Module optimizer: The optimizer to save.
-    :param int epochs: The number of epochs trained.
-    :param str model_config: The configuration of the model.
     :param list log_loss: The loss value to save.
-    :param str timestamp: The timestamp for the saved file. recommend format is '%Y%m%d-%H%M%S(%z)'. Default: None.
+    :param tuple|list timestamps: The timestamps for the saved file. Default: None.
     :param str pathname: The directory path to save the file.
     :param str filename: The filename to save the model parameters. ex: `R_ref` or `R_gray`. Default: `type(model).__name__`
     """
@@ -812,35 +862,73 @@ def save_modelparams(model: nn.Module, optimizer: nn.Module, epochs: int, model_
     # torch.save(R_gray.state_dict(), f'/record of experiment/{timestamp}_Rgray_weights.pth') # lab server
     
     # 儲存模型參數 + optimizer
-    # timestamp = time.strftime('%Y%m%d-%H%M%S(%z)', time.localtime(timestamp))
+    start_time_str = get_starttime_from_timestamps(timestamps)
     obj = {
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'epochs': epochs,
-        'model_config': model_config,
+        'config': model.config,
         'loss': log_loss,
-        'loss_function': loss_function # 給 colVAE 用的
     }
-    # filename = type(model).__name__ if filename is None else filename
-    filename = model.name if filename is None else filename
-    filename = f'{timestamp}_{filename}_weights.pth'
+    filename = model.config['name'] if filename is None else filename
+    filename = f'{start_time_str}_{filename}_weights.pth'
     torch.save(obj, pathname + filename)  
     print(f'Saved.\n{pathname}{filename}')
 
 
+# # 以下是舊的 save_modelparams 函式, 已被上面的取代, 留著以備不時之需.
+# def save_modelparams(model: nn.Module, optimizer: nn.Module, epochs: int, model_config: str, 
+#                      log_loss: list, 
+#                      loss_function: str=None,
+#                      timestamp: str=None, 
+#                      pathname: str='record of experiment/', 
+#                      filename: str=None):
+#     """
+#     :param nn.Module model: The model to save.
+#     :param nn.Module optimizer: The optimizer to save.
+#     :param int epochs: The number of epochs trained.
+#     :param str model_config: The configuration of the model.
+#     :param list log_loss: The loss value to save.
+#     :param str timestamp: The timestamp for the saved file. recommend format is '%Y%m%d-%H%M%S(%z)'. Default: None.
+#     :param str pathname: The directory path to save the file.
+#     :param str filename: The filename to save the model parameters. ex: `R_ref` or `R_gray`. Default: `type(model).__name__`
+#     """
+#     assert isinstance(model, nn.Module), f'model must be an instance of nn.Module, but got {type(model)}.'
+
+#     # 只儲存模型參數
+#     # torch.save(R_gray.state_dict(), f'/record of experiment/{timestamp}_Rgray_weights.pth') # lab server
+    
+#     # 儲存模型參數 + optimizer
+#     # timestamp = time.strftime('%Y%m%d-%H%M%S(%z)', time.localtime(timestamp))
+#     obj = {
+#         'model_state_dict': model.state_dict(),
+#         'optimizer_state_dict': optimizer.state_dict(),
+#         'epochs': epochs,
+#         'model_config': model_config,
+#         'loss': log_loss,
+#         'loss_function': loss_function # 給 colVAE 用的
+#     }
+#     # filename = type(model).__name__ if filename is None else filename
+#     filename = model.name if filename is None else filename
+#     filename = f'{timestamp}_{filename}_weights.pth'
+#     torch.save(obj, pathname + filename)  
+#     print(f'Saved.\n{pathname}{filename}')
 
 
-def save_text_loss_of_experiment(timestamp: str, times, model_name: str, model_config: str, log_loss: list, log_lr: list, 
+
+# def save_text_loss_of_experiment(timestamp: str, times, model_name: str, model_config: str, log_loss: list, log_lr: list, 
+#                                  filename=None, 
+#                                  is_each_loss=False): #, each_loss_label=['mse', 'kl', 'dice', 'ssim']):
+def save_text_loss_of_experiment(timestamps: tuple|list, model: torch.nn.Module, log_loss: list, log_lr: list, 
                                  filename=None, 
                                  is_each_loss=False): #, each_loss_label=['mse', 'kl', 'dice', 'ssim']):
     """ Save the training loss and learning rate logs to a text file.
 
     The filename is `{timestamp}_{model_name}_loss.txt`.
 
-    :param timestamp: Timestamp of the experiment.
-    :param times: Tuple of (start_time, duration, end_time).
-    :param model_name: Name of the model.
-    :param model_config: Configuration of the model.
+    ~~:param timestamp: Timestamp of the experiment.~~
+
+    :param timestamps: Tuple of (start_time, duration, end_time).
+    :param model: The model instance.
     :param log_loss: List of loss values logged during training.
     :param log_lr: List of learning rates logged during training.
     :param filename: Optional custom filename (without extension). Default is None, which results in `{timestamp}_{model_name}_loss.txt`.
@@ -849,19 +937,25 @@ def save_text_loss_of_experiment(timestamp: str, times, model_name: str, model_c
     :return None: Print the path to the directory, and the filename of the saved record.
     """
     
-    if filename:
-        filename = f'{timestamp}_{model_name}_{filename}.txt'
-    else:
-        filename = f'{timestamp}_{model_name}_loss.txt'
+    # timestamp = time.strftime('%Y%m%d-%H%M%S(%z)', time.localtime(timestamps[0]))
+    start_time_str = get_starttime_from_timestamps(timestamps)
 
-    times_string = timestamp_to_strftime(times, columns=['start', 'duration', 'end'])
+    if filename:
+        filename = f'{start_time_str}_{model.config['name']}_{filename}.txt'
+    else:
+        filename = f'{start_time_str}_{model.config['name']}_loss.txt'
+
+    times_str = convert_timestamps_to_strings(timestamps, columns=['start', 'duration', 'end'])
 
     with open(f'record of experiment/{filename}', 'w') as f:
-        f.write(f'timestamp={timestamp}\n\n')
-        f.write(f'{times_string}\n\n')
+        f.write(f'timestamp=\n{times_str}\n\n')
 
-        f.write(f'model name={model_name}\n\n')
-        f.write(f'model config=\n{model_config}\n\n')
+        if hasattr(model, 'config'):
+            f.write(f'model config=\n')
+            f.write('\n'.join(f'{k}: {v}' for k, v in model.config.items()))
+            f.write('\n\n')
+        elif hasattr(model, 'model_config'): # 雖然 model 的設定都存在 model.config (字典), 但舊的 model 是存在 model.model_config (字串).
+            f.write(f'model config=\n{model.model_config}\n\n')
         
         if is_each_loss:    
             for key, value in log_loss.items():
@@ -883,30 +977,41 @@ def save_text_loss_of_experiment(timestamp: str, times, model_name: str, model_c
 
 
 
-def save_text_cm_of_experiment(timestamp: str, times: str, model_name: str, model_config: str, cm: np.ndarray):
+# def save_text_cm_of_experiment(timestamps: tuple, model_name: str, model_config: str|dict, cm: np.ndarray):
+def save_text_cm_of_experiment(timestamps: tuple, cm: np.ndarray, model: torch.nn.Module):
     """ 
     Save the confusion matrix and experiment details to a text file.    
 
     The filename is `{timestamp}_{model_name}_cm.txt`.
 
-    :param timestamp: Timestamp of the experiment(training) start time.
-    :param times: Tuple of (start_time, duration, end_time) in seconds.
-    :param model_name: Name of the model. `model.name` is recommended.
-    :param model_config: Configuration of the model. `model.model_config` is recommended.
+    :param timestamps: Tuple of (start_time, duration, end_time) in seconds.
+    :param model: The model instance.
     :param cm: Confusion matrix as a numpy array.
     :return None: Print the path to the directory, and the filename of the saved record
     """
-    filename = f'{timestamp}_{model_name}_cm.txt'
+    start_time_str = get_starttime_from_timestamps(timestamps)
+    filename = f'{start_time_str}_{model.config["name"]}_cm.txt'
 
-    times_string = timestamp_to_strftime(times, columns=['start', 'duration', 'end'])
+    times_str = convert_timestamps_to_strings(timestamps, columns=['start', 'duration', 'end'])
 
     with open(f'record of experiment/{filename}', 'w') as f:
-        f.write(f'timestamp={timestamp}\n\n')
-        f.write(f'{times_string}\n\n')
+        f.write(f'timestamp=\n{times_str}\n\n')
+        # f.write(f'{times_str}\n\n')
 
         # f.write(f'model name={model_name}\n')
-        f.write(f'model config=\n{model_config}\n\n')
-        
+        if hasattr(model, 'config'):    # 舊的模型沒有 .config 屬性, 所以要檢查
+            f.write(f'model config=\n')
+            f.write('\n'.join(f'{k}: {v}' for k, v in model.config.items()))
+            f.write('\n\n')
+        elif hasattr(model, 'model_config'): # 雖然 model.config 都是 dict, 但舊的 model.model_config 還是 str.
+            f.write(f'model config=\n{model.model_config}\n\n')        
+        # if isinstance(model_config, dict):
+        #     f.write(f'model config=\n')
+        #     f.write('\n'.join(f'{k}: {v}' for k, v in model_config.items()))
+        #     f.write('\n\n')
+        # elif isinstance(model_config, str): # 雖然 model.config 都是 dict, 但舊的 model.model_config 還是 str.
+        #     f.write(f'model config=\n{model_config}\n\n')
+
         # f.write(f'Confusion Matrix:\n{cm}') # 不可以這樣寫, 因為只會印出每列的前/後幾個元素, 中間會以 ... 省略號表示. (但可以改成下面 np.savetext 的寫法?)
         # np.savetxt(f'record of experiment/{filename}', cm, fmt='%.4f', delimiter=' ', newline='\\n', header='', footer='', comments='', encoding=None, append=True)
         f.write('Confusion Matrix:\n')
@@ -920,20 +1025,23 @@ def save_text_cm_of_experiment(timestamp: str, times: str, model_name: str, mode
 
 
 
-def save_fig_of_experiment(figtype: str, fig: plt.Figure, timestamp: str, model_name: str):
+def save_fig_of_experiment(figtype: str, fig: plt.Figure, timestamps: tuple, model_name: str):
     """ Save the figure of the experiment to a file. 
     
     The filename is `{timestamp}_{model_name}_{figtype}.png`.
 
     :param figtype: Type of the figure. Must be either 'loss', 'cm', 'generated_wafermaps', 'distOfLoss', or 'distOfLoss(truncated)'.
     :param fig: The figure to save.
-    :param timestamp: Timestamp of the experiment.
+    ~~:param timestamp: Timestamp of the experiment.~~
+    :param timestamps: Tuple of (start_time, duration, end_time) in seconds.
     :param model_name: Name of the model. The attribute of the model, `model.name`.
     :return None: Print the path to the directory and the filename of the saved figure.
     """
+    start_time_str = get_starttime_from_timestamps(timestamps)
+    # timestamp = time.strftime('%Y%m%d-%H%M%S(%z)', time.localtime(timestamps[0]))
 
     assert figtype in ['loss', 'cm', 'generated_wafermap', 'generated_wafermaps', 'distOfLoss', 'distOfLoss(truncated)'], f'figtype must be "loss", "cm", "generated_wafermaps", "distOfLoss", or "distOfLoss(truncated)", but got {figtype}.'
-    filename = f'{timestamp}_{model_name}_{figtype}.png'
+    filename = f'{start_time_str}_{model_name}_{figtype}.png'
     fig.savefig(f'record of experiment/{filename}', dpi=300, bbox_inches='tight') #bbox_inches='tight' 讓圖表不會有多餘的空白邊界.
 
     # print(homepath, filename, sep='')
@@ -1105,8 +1213,3 @@ def get_statistic_of_each_loss_component(path=None, filenames=None, n_TargetBatc
         #     print(f"{loss_label}: 'mean': {mean:.9f}, 'std': {std:.9f}, 'median': {median:.9f}, 'mad': {mad:.9f}, 'iqr': {iqr:.9f}, 'min': {min:.9f}, 'max': {max:.9f}")
 ##### ---------------------------------------------------------------- #####
 
-
-
-# if __name__ == '__main__':
-#     print('`utils.py` is being run directly.')    
-#     # log_to_file('`utils.py` is being run directly.', is_initialize=False)   

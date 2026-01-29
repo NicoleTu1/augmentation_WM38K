@@ -22,8 +22,9 @@ def train_R(model, train_loader, criterion, optimizer, scheduler, epochs,
 
     :return log_loss: list of average loss per epoch
     :return log_lr: list of learning rate per epoch
-    :return times: tuple of (start_time, duration, end_time)
-    :return dataloader_name: name of the dataloader used for training, if available.   
+    :return timestamps: tuple of (start_time, duration, end_time)
+
+    ~~:return dataloader_name: name of the dataloader used for training, if available.~~
     """
     model.train()
     log_loss, log_lr = [], []
@@ -42,10 +43,8 @@ def train_R(model, train_loader, criterion, optimizer, scheduler, epochs,
                 # ↑ 只有在 inference 時才需要加上 Sigmoid, 因為 inference 時不會使用 criterion, 所以需要手動將 logits 轉換為 probabilities.
                 loss = criterion(predict, label)
 
-            # loss.backward()            
             scaler.scale(loss).backward()
 
-            # optimizer.step()
             scaler.step(optimizer)
 
             scaler.update()
@@ -62,17 +61,23 @@ def train_R(model, train_loader, criterion, optimizer, scheduler, epochs,
             
     time_end = time.time()
     time_duration = time_end - time_start
-    times = (time_start, time_duration, time_end)
+    timestamps = (time_start, time_duration, time_end)
 
-    dataloader_name = train_loader.name if hasattr(train_loader, 'name') else None
+    # dataloader_name = train_loader.name if hasattr(train_loader, 'name') else None
+    # dataloader_config = train_loader.config if hasattr(train_loader, 'config') else None
+    # dataloader_info = f'name={dataloader_name}, config={dataloader_config}'
+    # return log_loss, log_lr, timestamps, dataloader_info
 
-    return log_loss, log_lr, times, dataloader_name
+    model.config['train_loader'] = train_loader.config
+    # dataloader_config = f'{train_loader.config}'
+    # return log_loss, log_lr, timestamps, dataloader_config
+    return log_loss, log_lr, timestamps
 
 
 
 
 @torch.no_grad()
-def validate_Rref(model, validation_loader, defect_types, model_config: str):
+def validate_R(model, validation_loader, defect_types):
     """
     :param model: the trained model
     :param validation_loader: DataLoader for the validation dataset
@@ -109,7 +114,7 @@ def validate_Rref(model, validation_loader, defect_types, model_config: str):
 
     time_end = time.time()
     time_duration = time_end - time_start
-    times = (time_start, time_duration, time_end)
+    timestamps = (time_start, time_duration, time_end)
 
     cm = confusion_matrix(all_labels, all_preds, labels=labels_in_code)    
     # 把正確的資料筆數從數量改成百分比
@@ -117,12 +122,26 @@ def validate_Rref(model, validation_loader, defect_types, model_config: str):
     # cm = cm * 100  # 如果要顯示百分比, 可以將這一行取消註解, 但這樣會使得 confusion matrix 的值變成百分比, 而不是小數.
 
     assert validation_loader.name, '`validation_loader.name` must be set. Please set the `name` of the `validation_loader` before calling `inference_Rref`.'
-    model_config += f'\ndataloader(inference) = {validation_loader.name}'
-    title = f'Confusion Matrix of {model.name}\n--------------------\n{model_config}'
-
-    fig = plot_confusion_matrix(cm, defect_types, title=title, times=times)
     
-    return fig, times, cm, model_config
+    if hasattr(model, 'config'):
+        model.config['validation_loader'] = validation_loader.config
+        model_config_str = '\n'.join([f'{k}={v}' for k, v in model.config.items()])
+        title = f'Confusion Matrix of {model.name}\n--------------------\n{model_config_str}'
+    elif hasattr(model, 'model_config'):
+        model.model_config += f'\nvalidation_loader = {validation_loader.config["name"]}'
+        title = f'Confusion Matrix of {model.name}\n--------------------\n{model.model_config}'
+
+    # if isinstance(model_config, dict):
+    #     model_config['dataloader(inference)'] = validation_loader.name
+    #     model_config_str = '\n'.join([f'{k}={v}' for k, v in model_config.items()])
+    #     title = f'Confusion Matrix of {model.name}\n--------------------\n{model_config_str}'
+    # elif isinstance(model_config, str):
+    #     model_config += f'\ndataloader(inference) = {validation_loader.name}'
+    #     title = f'Confusion Matrix of {model.name}\n--------------------\n{model_config}'
+
+    fig = plot_confusion_matrix(cm, defect_types, title=title, times=timestamps)
+    
+    return fig, timestamps, cm
 
 
 
@@ -289,8 +308,13 @@ class MyVGG_4layer(nn.Module):
         
         self.name = model_name if model_name else type(self).__name__
         self.output_channels = output_channels
-        self.model_config = f'output_channels={output_channels}'
-
+        self.config = {
+            'name': self.name,
+            'output_channels': output_channels, 
+            'num_classes': num_classes
+            }
+        # self.model_config = f'output_channels={output_channels}'
+        self.model_config = ''  # 舊版的 model_config 已經被棄用, 改用 self.config 字典來儲存模型設定. 考量到舊版程式碼中有使用 model_config 的地方, 為了避免出錯, 這裡先設為空字串.
 
         assert output_channels % 8 == 0, f'output_channels must be a multiple of 8, but got {output_channels}.'
         self.conv_layers = nn.ModuleList([
@@ -346,7 +370,8 @@ class MyVGG_3blocks(nn.Module):
         
         self.name = model_name if model_name else type(self).__name__
         self.output_channels = output_channels
-        self.model_config = f'output_channels={output_channels}'
+        self.config = {'output_channels': output_channels}
+        self.model_config = ''  # 舊版的 model_config 已經被棄用, 改用 self.config 字典來儲存模型設定. 考量到舊版程式碼中有使用 model_config 的地方, 為了避免出錯, 這裡先設為空字串.
 
         assert output_channels % 8 == 0, f'output_channels must be a multiple of 8, but got {output_channels}.'
         self.conv_layers = nn.ModuleList([

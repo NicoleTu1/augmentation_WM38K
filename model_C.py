@@ -5,11 +5,14 @@ from torch.amp import GradScaler, autocast  # 用於 GPU 加速運算 # 舊版�
 
 import time
 from collections import defaultdict
+from loss_functions import loss_function_colorizeVAE
+
+from utils import device, assert_nan_and_inf, Logger, rectify_pixel_values
+from dataset_utils import dataset_config, generate_perfect_wafermap_and_label
+
+
 
 # from model_R import vgg_block # 這句話會造成 循環匯入(circular import). 因為 C 要匯入 R, 而 R 也要匯入 utils, utils 又匯入 C.
-from utils import device, assert_nan_and_inf, generate_perfect_wafermap_and_label, Logger, rectify_pixel_values
-
-
 def vgg_block(in_channels, out_channels): # 從 model_R.py 複製過來的
     """
     `nn.Sequential(Conv2d, BatchNorm2d, ReLU, MaxPool2d)`
@@ -40,7 +43,8 @@ class C_ColorizerNetwork(nn.Module):
     :return: 彩色晶圓圖 (即影片著色文獻中, "當前幀的預測 ab 通道 `Xab_t`")
     """
 
-    def __init__(self, model_name, image_size: tuple, R_info: dict, 
+    def __init__(self, model_name, image_size: tuple, R_config: dict, 
+                 R_info: str='', 
                  z_dim=256, 
                  encoder_input_channels=4):
         """
@@ -50,10 +54,6 @@ class C_ColorizerNetwork(nn.Module):
         :param encoder_input_channels: Default=4. If do ablation for Attention Mechanism, set to 2.
         """
         super(C_ColorizerNetwork, self).__init__()
-
-        self.model_name = model_name if model_name else __class__.__name__
-        self.loss_function = None   # will be defined during training phase
-        self.R_info = R_info
 
         # 為了方便後續將所有 input 調整成同樣的尺寸, 這裡先建立一個變數, 儲存 upsample 的目標尺寸.
         self.upsample_target_size = image_size
@@ -84,14 +84,6 @@ class C_ColorizerNetwork(nn.Module):
             vgg_block(128, self.encoder_output_channels),  # (B, 128, 16, 16) -> (B, C, 8, 8)
             # vgg_block(256, 512),  # (B, 256, 8, 8) -> (B, 512, 4, 4)
         )
-        
-        # # 初始化編碼器的權重, 避免在編碼過程出現 NaN
-        # def init_weights(m):
-        #     if isinstance(m, nn.Conv2d):
-        #         nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
-        #         if m.bias is not None:
-        #             nn.init.constant_(m.bias, 0)
-        # self.encoder.apply(init_weights)
 
         
         # 潛在空間維度 (z_dim)
@@ -109,8 +101,6 @@ class C_ColorizerNetwork(nn.Module):
 
         # 解碼器部分
         # 解碼器的輸入是 latent_variant `z`
-        # 論文圖 4 也顯示輸入 `gray_image`, `ref_image` 等會進入解碼器部分, 暗示條件式 VAE 或 U-Net 結構. 
-        # 我們假設 `conditioning_features_extractor` 處理 `ref_image_resized` 以提供上下文資訊給解碼器. 
         
         # 這一塊是拿來提取"調整尺寸後的ref_image"的特徵, 稱為 `conditioned_features`.
         # 他會先跟 `z` 拼接, 然後解碼, 以提供額外的上下文資訊. 
@@ -124,7 +114,7 @@ class C_ColorizerNetwork(nn.Module):
         
         # 將潛在空間的 `z` 投影到與 `conditioned_features` 相同的空間, 以利後續拼接.
         self.z_projected_channels = 64
-         # latent_to_spatial_initial 的輸出尺寸 = z_projected_channels * H * W
+        # latent_to_spatial_initial 的輸出尺寸 = z_projected_channels * H * W
         self.latent_to_spatial_initial = nn.Linear(self.z_dim, self.z_projected_channels * self.encoder_output_spatial_size ** 2) # 目標通道 * H * W
         # ↑ initial 在這裡的意思是將潛在空間的特徵映射回初始的空間特徵圖, 初始的空間特徵圖是指解碼器開始處理的特徵圖(??). 
 
@@ -133,30 +123,43 @@ class C_ColorizerNetwork(nn.Module):
         self.decoder_input_channels = (self.z_projected_channels) + (self.conditioned_features_channels)
         self.decoder = nn.Sequential(   
             nn.ConvTranspose2d(self.decoder_input_channels, 64, kernel_size=4, stride=2, padding=1), # -> 16x16 
-            # nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1), # -> 16x16 
-            # nn.LeakyReLU(0.2, inplace=True), 
             nn.ReLU(), 
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1), # -> 32x32
-            # nn.LeakyReLU(0.2, inplace=True), 
             nn.ReLU(), 
             nn.ConvTranspose2d(32, 1, kernel_size=4, stride=2, padding=1), # -> 64x64
-            # nn.LeakyReLU(0.2, inplace=True), 
-            # nn.ConvTranspose2d(8, 1, kernel_size=4, stride=2, padding=1), # -> 
             nn.Sigmoid()    # 將輸出限制在0-1之間
         )
 
-    def get_custom_repr(self):
-        custom_repr = f"C={self.model_name}("
+        self.config = {
+            'name': model_name if model_name else __class__.__name__, 
+            'upsample_target_size': image_size,
+            'loss_function': None,    # will be updated during training phase
+            'R_config': R_config, 
+            'z_dim': self.z_dim,
+            'encoder_input_channels': self.encoder_input_channels,
+            'encoder_output_channels': self.encoder_output_channels,
+            'conditioned_features_channels': self.conditioned_features_channels,
+            'z_projected_channels': self.z_projected_channels,
+            # 'encoder_output_spatial_size': self.encoder_output_spatial_size,
+            # 'decoder_input_channels': self.decoder_input_channels,
+            'train_loader': None,   # will be defined during training phase
+            'validation_loader': None,   # will be defined during inference phase
+        }
         
-        custom_repr += f"encoder_input_channels={self.encoder_input_channels}, encoder_output_channels={self.encoder_output_channels}, \n"
-        custom_repr += f"z_dim={self.z_dim}, \n"
-        custom_repr += f"  decoder_input_channels + conditioned_features_channels=({self.decoder_input_channels} + {self.conditioned_features_channels}), \n"
+        if R_info:
+            print('R_info will be deprecated in class C_ColorizerNetwork. The replacement is R_config(dict).')
+            self.config['R_info'] = R_info
 
-        custom_repr += f"  loss function=({self.loss_function}), \n"
-        custom_repr += f"  R_info={self.R_info}, \n"
-        custom_repr = custom_repr.rstrip(', \n')  # Remove trailing comma and newline
-        custom_repr += f")"
-        return custom_repr
+    def update_config(self, key: str, value):
+        """
+        Update the configuration dictionary with a new key-value pair.
+
+        :param key: The key to update in the configuration dictionary.
+        :param value: The new value to set for the specified key.
+        :return: The updated configuration dictionary.
+        """
+        self.config[key] = value
+        return self.config
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -170,57 +173,39 @@ class C_ColorizerNetwork(nn.Module):
         ##### 以下插值函式若改為使用 `mode='bilinear', align_corners=False` 會不會使得生成影像的多樣性更高? 
         gray_image_resized = F.interpolate(gray_image, size=self.upsample_target_size, mode='nearest')
         ref_image_resized = F.interpolate(ref_image, size=self.upsample_target_size, mode='nearest')
-        # assert_nan_and_inf(gray_image_resized, f'class C: gray_image_resized')
-        # assert_nan_and_inf(ref_image_resized, f'class C: ref_image_resized')       
         if self.encoder_input_channels == 4:
             Wab_resized = F.interpolate(Wab, size=self.upsample_target_size, mode='nearest')
             Attenmap_resized = F.interpolate(Attenmap, size=self.upsample_target_size, mode='nearest')
-            # assert_nan_and_inf(Wab_resized, f'class C: Wab_resized')
-            # assert_nan_and_inf(Attenmap_resized, f'class C: Attenmap_resized')
             # 拼接所有調整後的輸入，作為編碼器的輸入
             encoder_input = torch.cat([gray_image_resized, Wab_resized, Attenmap_resized, ref_image_resized], dim=1)
             # shape = (B, 4, 32, 32)
         else:
             encoder_input = torch.cat([gray_image_resized, ref_image_resized], dim=1)
         # print(f'encoder_input.abs().max(): {encoder_input.abs().max()}')
-        # assert_nan_and_inf(encoder_input, f'class C: encoder_input')
         
         
-        # 查看卷積層的參數 ##### debug
-        # for i, (name, param) in enumerate(self.encoder.named_parameters()):
-        #     print(f'Encoder layer {i}: {name}, shape: {param.shape}, requires_grad: {param.requires_grad}')
-        #     if param.requires_grad:
-        #         assert_nan_and_inf(param, f'encoder parameter: {name}')
-
-
         # 編碼器前向傳播, 然後展平以便傳入全連接層
         encoded = self.encoder(encoder_input)   # shape = (B, 256, encoder_output_spatial_size, encoder_output_spatial_size)
-        # assert_nan_and_inf(encoded, f'class C: encoded')
         encoded_flat = encoded.view(encoded.size(0), -1)    # shape = (B, 256 * encoder_output_spatial_size * encoder_output_spatial_size)
 
 
         # 取得 mu 和 logvar
         mu = self.fc_mu(encoded_flat)   
         logvar = self.fc_logvar(encoded_flat)
-        # assert_nan_and_inf(mu, f'class C: mu')
-        # assert_nan_and_inf(logvar, f'class C: logvar')
         
         # 重參數化, 採樣潛在變數 z
         z = self.reparameterize(mu, logvar)
-        # assert_nan_and_inf(z, f'class C: z')
 
 
         # 解碼器前向傳播
         # 將潛在空間的變數 `z` 投影回空間特徵圖 (將 `z` 投影到與 `conditioned_features` 相同的空間)
         z_projected = self.latent_to_spatial_initial(z) # shape: (B, 64 * encoder_output_spatial_size * encoder_output_spatial_size)
-        # assert_nan_and_inf(z_projected, f'class C: z_projected')
         z_projected = z_projected.view(z_projected.size(0), self.z_projected_channels, self.encoder_output_spatial_size, self.encoder_output_spatial_size) 
 
         # 從 `ref_image_resized` 提取條件特徵，用於解碼器的輸入 [參考原文的 Figure 4]  
         # 這邊再提取一次 ref_image_resized 的特徵, 是為了了給解碼器使用. 若不提取, 則解碼器無法使用 ref_image 的資訊, 那麼解碼器就無法生成有意義的彩色晶圓圖.
         # ref_image_resized shape: (B, 1, 64, 64)
         conditioned_features = self.conditioning_features_extractor(ref_image_resized)   # (B, 64, 8, 8)
-        # assert_nan_and_inf(conditioned_features, f'class C: conditioned_features')
 
         # 拼接潛在空間特徵和條件特徵，作為解碼器的輸入
         # assert z_projected.shape[3] == conditioned_features.shape[2], \
@@ -231,24 +216,15 @@ class C_ColorizerNetwork(nn.Module):
 
         # 透過解碼器生成 ab 通道 (因為是 wafer map 所以改成 1 通道)
         x_recon = self.decoder(decoder_input) # 輸出 (B, 1, 32, 32)
-        # assert x_recon.max() <= 1.0 and x_recon.min() >= 0.0, \
-        #     f'Expected x_recon values to be in [0, 1], but got min {x_recon.min()} and max {x_recon.max()}'
 
-        # assert x_recon.shape == (gray_image.size(0), 1, self.upsample_target_size[0], self.upsample_target_size[1]), \
-        #     f'Expected x_recon shape to be (B, 1, {self.upsample_target_size[0]}, {self.upsample_target_size[1]}), but got {x_recon.shape}'        
         return x_recon, mu, logvar # 回傳 x_recon 和 VAE 的 mu/logvar，以便計算 KL 散度損失
 
 
 
-from collections import defaultdict
-from loss_functions import loss_function_colorizeVAE
-def train_colVAE(model: C_ColorizerNetwork, model_config: str, 
-                 optimizer: torch.nn.Module, scheduler, 
-                 epochs: int, 
-                 augment_loader: torch.utils.data.DataLoader, 
+def train_colVAE(model, optimizer, scheduler, 
+                 epochs, augment_loader, 
                  model_F, loss_weights: dict[list], 
-                 window_size: int,
-                 batch_size: int, wafer_resize_scale: tuple,    # 這一列跟下一列是為了未來能將訓練函式搬到 model_C 而定義的
+                 window_size: int, 
                  scaler: GradScaler, logger: Logger,
                 #  is_AttentionMechanism: bool=True, # 直接用 colVAE.encoder_input_channels 來判斷. 4=使用注意力機制, 2=不使用注意力機制
                  ):
@@ -258,24 +234,18 @@ def train_colVAE(model: C_ColorizerNetwork, model_config: str,
     model.train()
     
     w_sum = sum([w[0] for w in loss_weights.values() if w[0] > 0])
-    if not 0.98 <= w_sum <= 1.2: 
-        logger.log(f'Sum of loss weights must be 1.0. But got {w_sum}.', is_print=True)
+    assert 0.98 <= w_sum <= 1.2, f'Sum of loss weights must be 1.0. But got {w_sum}.'
 
-    # statistic_for_normalization = get_statistic_of_each_loss_component() if statistic_for_normalization is None else statistic_for_normalization
     log_loss, log_lr = [], []
     log_each_loss = defaultdict(list) # 每個 key 的 value 是一個 list, 用來存放每個 epoch 的損失值.
     time_start = time.time()
-    # loss_max_as_denominator = None  # 這個參數是給 loss_function_colorizeVAE 使用的, 用來指定 loss 各自的 max 作為分母.
 
-    gray_images = generate_perfect_wafermap_and_label(batch_size, wafer_resize_scale)[0].to(device)
+    gray_images = generate_perfect_wafermap_and_label(dataset_config['batch_size'], dataset_config['wafer_resize_scale'])[0].to(device)
     for epoch in range(epochs):
         train_loss = 0.0
-        # train_loss = torch.tensor(0.0, device=device)
-        # each_loss_sum = defaultdict(list) # 用來儲存每個 batch 的損失值, 以記錄每個 epoch 的損失變化趨勢.
         each_loss_sum = defaultdict(float) # 用來累加每個 batch 的損失值, 最後再除以 batch 數量, 得到每個 epoch 的平均損失值.
 
         for ref_image, failureType in augment_loader:
-            
             optimizer.zero_grad()
             ref_image = ref_image.to(device)
             gray_image = gray_images[:ref_image.size(0), :, :, :]  # shape=(B, 1, H, W)
@@ -292,14 +262,9 @@ def train_colVAE(model: C_ColorizerNetwork, model_config: str,
                 # 因為不使用注意力機制, 所以不叫 model_F 做事
                 with autocast(device_type=device.type):
                     colored_image, mu, logvar = model(gray_image, ref_image, None, None)
-            # with autocast(device_type=device.type):
-            #     if model.encoder_input_channels == 4: # 使用注意力機制
-            #         colored_image, mu, logvar = model(gray_image, ref_image, wab, attenmap) 
-            #     else: # 不使用注意力機制
-            #         colored_image, mu, logvar = model(gray_image, ref_image)
 
             with autocast(device_type=device.type):
-                loss, loss_equation_str, each_loss_dict, each_loss_note = loss_function_colorizeVAE(colored_image, ref_image, mu, logvar, loss_weights, 
+                loss, each_loss_dict, each_loss_note = loss_function_colorizeVAE(colored_image, ref_image, mu, logvar, loss_weights, 
                                                                                                     window_size=window_size
                                                                                                     )
                                                                                                     # goal_percent, 
@@ -311,13 +276,11 @@ def train_colVAE(model: C_ColorizerNetwork, model_config: str,
                 # each_loss_dict 的內容是: {'mse': mse_loss, 'kld': kld_loss, 'dice': dice_loss, 'ssim': ssim_loss}
 
             # KL_annealer.step()
-            # loss.backward()
             scaler.scale(loss).backward()
 
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) ##### 梯度剪裁: 可以嘗試不同的 max_norm 值, 例如 1.0 / 5.0 / 10.0
 
-            # optimizer.step()
             scaler.step(optimizer)
             scaler.update()
 
@@ -347,20 +310,27 @@ def train_colVAE(model: C_ColorizerNetwork, model_config: str,
     
     loss_equation_str = ''
     for loss_label, (loss_weight, adjustment) in loss_weights.items():
+        # 計算方式: loss_weight * (|loss_label - adjustment|) 
         loss_equation_str += f'{loss_weight:.4f} * (|{loss_label}-{adjustment}|) + '
+        # 計算方式: loss_weight * max(0, loss_label - adjustment) + adjustment
+        # loss_equation_str += f'[{loss_weight:.4f} * max(0, {loss_label}-{adjustment}) + a] + '
     loss_equation_str = loss_equation_str.rstrip(' + ')
     if window_size != 11:
         loss_equation_str += f'\nSSIM_window_size={window_size}'
     # if KL_annealer is not None:
     #     loss_equation_str += f'\n  KL_Annealer(total_steps={KL_annealer.total_steps}, max_weight={KL_annealer.max_weight})' 
-    model.loss_function = loss_equation_str
+
+    model.update_config('loss_function', loss_equation_str) 
     
     time_end = time.time()
     time_duration = time_end - time_start
-    times = (time_start, time_duration, time_end)
-    dataloader_name = augment_loader.name if hasattr(augment_loader, 'name') else None
-    return log_loss, log_lr, times, dataloader_name, log_each_loss, each_loss_note
-    # return log_loss, log_lr, times, dataloader_name, each_loss_sum, each_loss_note  # 用於統計各 loss 的統計量. 此行會回傳 each_loss_sum, 它記錄每個batch的loss, 不是每個epoch的平均loss.
+    timestamps = (time_start, time_duration, time_end)
+
+    # dataloader_name = augment_loader.name if hasattr(augment_loader, 'name') else None
+    model.update_config('train_loader', augment_loader.config)
+
+    return log_loss, log_lr, timestamps, log_each_loss, each_loss_note
+    # return log_loss, log_lr, timestamps, dataloader_name, each_loss_sum, each_loss_note  # 用於統計各 loss 的統計量. 此行會回傳 each_loss_sum, 它記錄每個batch的loss, 不是每個epoch的平均loss.
 
 
 
@@ -374,76 +344,6 @@ def train_colVAE(model: C_ColorizerNetwork, model_config: str,
 
 
 
-
-
-# def contextual_loss_wafer(x_recon, x, h=0.3):
-#     """
-#     計算 Contextual Loss. 這個 loss 用於衡量兩張圖像在特徵空間中的相似度，特別適合用於圖像重建和生成任務中。
-#     Contextual Loss 的優點在於它能夠捕捉圖像的語義資訊，而不僅僅是像素級的差異，這對於晶圓圖這類結構化圖像尤為重要。
-#     參考文獻: Mechrez et al., "The Contextual Loss for Image Transformation with Non-Aligned Data", ECCV 2018.
-#     連結: https://arxiv.org/abs/1803.02077
-
-#     :param x_recon: 重建後的圖像特徵
-#     :param x: 原始圖像特徵
-#     :param h: 縮放參數，控制相似度敏感度
-#     """
-#     # 將張量重新排列以進行矩陣乘法
-#     x_recon_flat = x_recon.view(x_recon.shape[0], x_recon.shape[1], -1)
-#     x_gt_flat = x.view(x.shape[0], x.shape[1], -1)
-    
-#     # 計算 L2 距離
-#     dist_xy = torch.cdist(x_recon_flat, x_gt_flat, p=2)
-#     dist_xx = torch.cdist(x_recon_flat, x_recon_flat, p=2)
-    
-#     # 計算相似度
-#     sim_xy = torch.exp(-dist_xy**2 / (h**2 + 1e-5)) # 若 dist_xy 很大, 則 sim_xy 會趨近於 0
-#     sim_xx = torch.exp(-dist_xx**2 / (h**2 + 1e-5)) # 若 dist_xx 很大, 則 sim_xx 會趨近於 0
-    
-#     # 計算 Contextual Loss
-#     loss = -torch.log(sim_xy.min(dim=2)[0] / (sim_xx.min(dim=2)[0] + 1e-5)) 
-#     assert not torch.isnan(loss).any(), f'Contextual Loss is NaN! sim_xy.min: {sim_xy.min()}, sim_xx.min: {sim_xx.min()}'
-#     assert not torch.isinf(loss).any(), f'Contextual Loss is Inf! sim_xy.min: {sim_xy.min()}, sim_xx.min: {sim_xx.min()}'
-#     return loss.mean()
-
-
-
-# ########## perceptual loss ##########
-# 感知損失 (Perceptual Loss) 是一種基於高層特徵的損失函數，通常用於圖像生成和圖像超分辨率等任務中。
-# 它藉由比較"生成圖像"和"目標圖像"在某個 CNN 中的高層特徵來衡量兩者之間的差異，所以必須使用預訓練的 CNN 模型來提取這些特徵。
-# 這邊直接使用 R_ref 來計算感知損失, 因為 R_ref 已經是預訓練好的特徵提取器.
-
-# 感知損失的優點在於它能夠捕捉圖像的高層次結構和語義資訊，而不僅僅是像素級別的差異，這使得生成的圖像在視覺上更具吸引力和真實感。
-# 在晶圓圖著色的任務中，感知損失可以幫助模型生成更符合人類視覺感知的細節和紋理，從而提升生成圖像的質量。 --> 晶圓圖不需要太多細節跟紋理吧...? #######
-# MSE 損失: 強制模型在像素層面保持基本結構和顏色。
-# Perceptual 損失: 引導模型生成更符合人類視覺感知的細節和紋理。
-
-# for param in R_ref.parameters():
-#     param.requires_grad = False
-
-# class PerceptualLoss_Rref(nn.Module):
-#     def __init__(self, feature_layer=4):
-#         super(PerceptualLoss_Rref, self).__init__()
-#         self.feature_extractor = nn.Sequential(*list(R_ref.children())[:feature_layer]).eval()
-#         self.mse_loss = nn.MSELoss()
-
-#     def forward(self, x_rec, x_gt):
-#         # # 確保輸入是三通道 #### 原始的程式碼使用VGG 所以必須把input轉成3通道. 但這邊使用 R_ref, 所以不需要轉成3通道.
-#         # if x_rec.shape[1] == 1:
-#         #     x_rec = x_rec.repeat(1, 3, 1, 1)
-#         # if x_gt.shape[1] == 1:
-#         #     x_gt = x_gt.repeat(1, 3, 1, 1)
-
-#         features_rec = self.feature_extractor(x_rec)
-#         features_gt = self.feature_extractor(x_gt)
-        
-#         loss = self.mse_loss(features_rec, features_gt)
-#         return loss
-
-# # 初始化感知損失函式
-# perceptual_loss_fn = PerceptualLoss_Rref().to(device)
-
-# def perceptual_loss_wafer(x_recon, x):
-#     return perceptual_loss_fn(x_recon, x)
 
 
 
